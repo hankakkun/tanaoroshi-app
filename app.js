@@ -83,7 +83,7 @@ async function start(){
   $('video').srcObject=stream;await $('video').play();active=true;
   $('stop').disabled=false;setStatus('OCR準備中…');$('scanInfo').textContent='カメラ起動成功。文字認識を準備しています…';
   await getWorker();if(!active)return;
-  resetTracking();setStatus('読み取り中');$('scanInfo').textContent='四角い商品番号枠を緑のガイドに合わせてください。';
+  resetTracking();setStatus('読み取り中');$('scanInfo').textContent='';
   // OCRが終わってから次の処理を予約し、端末負荷を抑える。
   const scanLoop=async()=>{if(!active)return;await tick();if(active)timer=setTimeout(scanLoop,Number($('interval').value));};
   scanLoop();

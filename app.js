@@ -10,9 +10,9 @@ function render(){const keys=Object.keys(entries).sort(compare);if($('sort').val
 $('add').onclick=()=>{if(register($('manual').value))$('manual').value='';else alert('数字を入力してください');};$('manual').onkeydown=e=>{if(e.key==='Enter')$('add').click();};$('sort').onchange=render;
 $('clear').onclick=()=>{if(confirm('すべての棚卸データを削除しますか？')){entries={};save();}};
 $('export').onclick=()=>{const keys=Object.keys(entries).sort(compare);if($('sort').value==='desc')keys.reverse();const csv='\ufeff商品番号,数量\r\n'+keys.map(k=>`="${k}",${entries[k]}`).join('\r\n');const blob=new Blob([csv],{type:'text/csv;charset=utf-8;'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=`tanaoroshi-${new Date().toISOString().slice(0,10)}.csv`;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),2000);};
-let stream=null,worker=null,active=false,busy=false,front=false,timer=null,previous='',stable=0,armed=true,missing=0,lastCode='',lastSeen=0;
+let stream=null,worker=null,active=false,busy=false,front=false,timer=null,previous='',stable=0,armed=true,missing=0,lastCode='';
 function setStatus(s){$('status').textContent=s;}
-function resetTracking(){previous='';stable=0;armed=true;missing=0;lastCode='';lastSeen=0;}
+function resetTracking(){previous='';stable=0;armed=true;missing=0;lastCode='';}
 async function getWorker(){
  if(worker)return worker;
  if(!window.Tesseract)throw Error('OCRライブラリが読み込めません。通信状態を確認してください。');
@@ -29,10 +29,12 @@ function cropFrame(){
  const scale=Math.max(b.width/vw,b.height/vh),displayW=vw*scale,displayH=vh*scale;
  const offsetX=(displayW-b.width)/2,offsetY=(displayH-b.height)/2;
  const r=$('video').parentElement.querySelector('.roi').getBoundingClientRect();
- const x=Math.max(0,(r.left-b.left+offsetX)/scale),y=Math.max(0,(r.top-b.top+offsetY)/scale);
- const cw=Math.min(vw-x,r.width/scale),ch=Math.min(vh-y,r.height/scale);
+ // ガイド枠の内側を切り抜き、枠線や周囲の文字を極力含めない。
+ const insetX=r.width*0.025,insetY=r.height*0.08;
+ const x=Math.max(0,(r.left+insetX-b.left+offsetX)/scale),y=Math.max(0,(r.top+insetY-b.top+offsetY)/scale);
+ const cw=Math.min(vw-x,(r.width-2*insetX)/scale),ch=Math.min(vh-y,(r.height-2*insetY)/scale);
  if(cw<10||ch<10)return null;
- const c=document.createElement('canvas');const upscale=Math.min(2.2,1000/cw);
+ const c=document.createElement('canvas');const upscale=Math.min(1.8,850/cw);
  c.width=Math.round(cw*upscale);c.height=Math.round(ch*upscale);
  const ctx=c.getContext('2d',{willReadFrequently:true});ctx.drawImage(v,x,y,cw,ch,0,0,c.width,c.height);
  // 明暗補正のみ。固定二値化は黄色ラベルの文字を消すことがあるため行わない。
@@ -55,14 +57,16 @@ async function tick(){
  if(!active||busy||!worker)return;busy=true;
  try{const canvas=cropFrame();if(!canvas)return;
   const result=await worker.recognize(canvas);if(!active)return;
-  const code=extractCode(result.data.text);
+  const code=extractCode(result.data.text);const confidence=Number(result.data.confidence)||0;
   if(!code){missing++;stable=0;previous='';if(missing>=2)armed=true;setStatus('読み取り中');return;}
   missing=0;
   if(code===previous)stable++;else{previous=code;stable=1;}
   // 別番号を読んだら次の商品として受け付ける。同一番号は一度枠から外す。
   if(!armed&&code!==lastCode)armed=true;
-  setStatus(armed?`認識：${code} (${Math.min(stable,2)}/2)`:`登録済：${code}`);
-  if(armed&&stable>=2){if(register(code)){armed=false;lastCode=code;lastSeen=Date.now();setStatus(`登録完了：${code}`);}}
+  // 高信頼度なら1回で登録。低信頼度は2回一致を要求して誤登録を抑える。
+  const required=confidence>=85?1:2;
+  setStatus(armed?`認識：${code} (${Math.min(stable,required)}/${required})`:`登録済：${code}`);
+  if(armed&&stable>=required){if(register(code)){armed=false;lastCode=code;setStatus(`登録完了：${code}`);}}
  }catch(e){setStatus('認識エラー');$('scanInfo').textContent='OCRエラー：'+String(e.message||e);}finally{busy=false;}
 }
 async function start(){
@@ -76,10 +80,12 @@ async function start(){
   $('stop').disabled=false;setStatus('OCR準備中…');$('scanInfo').textContent='カメラ起動成功。文字認識を準備しています…';
   await getWorker();if(!active)return;
   resetTracking();setStatus('読み取り中');$('scanInfo').textContent='四角い商品番号枠を緑のガイドに合わせてください。';
-  timer=setInterval(tick,Number($('interval').value));tick();
+  // OCRが終わってから次の処理を予約し、端末負荷を抑える。
+  const scanLoop=async()=>{if(!active)return;await tick();if(active)timer=setTimeout(scanLoop,Number($('interval').value));};
+  scanLoop();
  }catch(e){const msg=String(e.message||e);stop();setStatus('開始エラー');$('scanInfo').textContent='カメラ/OCR起動エラー：'+msg;}
 }
-function stop(){active=false;clearInterval(timer);timer=null;if(stream){stream.getTracks().forEach(t=>t.stop());stream=null;}$('video').srcObject=null;$('start').disabled=false;$('stop').disabled=true;setStatus('停止中');}
-$('start').onclick=start;$('stop').onclick=stop;$('flip').onclick=async()=>{const was=active;stop();front=!front;if(was)await start();};$('interval').onchange=()=>{if(active){clearInterval(timer);timer=setInterval(tick,Number($('interval').value));}};
+function stop(){active=false;clearTimeout(timer);timer=null;if(stream){stream.getTracks().forEach(t=>t.stop());stream=null;}$('video').srcObject=null;$('start').disabled=false;$('stop').disabled=true;setStatus('停止中');}
+$('start').onclick=start;$('stop').onclick=stop;$('flip').onclick=async()=>{const was=active;stop();front=!front;if(was)await start();};$('interval').onchange=()=>{};
 document.addEventListener('visibilitychange',()=>{if(document.hidden&&active)stop();});
 if('serviceWorker'in navigator)navigator.serviceWorker.register('./sw.js').catch(()=>{});render();setStatus('待機中');

@@ -17,3 +17,7 @@ main{padding:8px}
 .scan-info:not(:empty){margin-top:7px}
 /* iPhoneの狭い画面でもガイドが大きく見えるようにする */
 @media(max-width:420px){.camera{aspect-ratio:3.5/1;min-height:105px}.panel{padding:10px}}
+
+/* v7: tap-to-edit product number */
+.code{cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:4px;min-width:0}
+.code:focus-visible{outline:2px solid #086ac5;outline-offset:3px}

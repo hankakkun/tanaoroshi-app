@@ -9,11 +9,46 @@ const normalize=s=>(String(s||'').match(/[0-9０-９]/g)||[]).map(c=>c>='０'&&c
 const compare=(a,b)=>{const x=a.replace(/^0+(?=\d)/,''),y=b.replace(/^0+(?=\d)/,'');return x.length-y.length|| (x<y?-1:x>y?1:0)||a.localeCompare(b,'en');};
 const save=()=>{localStorage.setItem(KEY,JSON.stringify(entries));localStorage.setItem(ORDER_KEY,JSON.stringify(lastRead));render();};
 function orderedKeys(){const keys=Object.keys(entries);const mode=$('sort').value;if(mode==='recent')return keys.sort((a,b)=>(lastRead[b]||0)-(lastRead[a]||0)||compare(a,b));if(mode==='oldest')return keys.sort((a,b)=>(lastRead[a]||0)-(lastRead[b]||0)||compare(a,b));keys.sort(compare);if(mode==='desc')keys.reverse();return keys;}
-function register(raw){const n=normalize(raw);if(!n)return false;entries[n]=(entries[n]||0)+1;lastRead[n]=++readSerial;save();$('scanInfo').textContent=`登録：${n}（${entries[n]}点）`;if($('sound').checked&&navigator.vibrate)navigator.vibrate(90);return true;}
-function render(){const keys=orderedKeys();$('kinds').textContent=`${keys.length}種類`;$('total').textContent=`合計${Object.values(entries).reduce((a,b)=>a+b,0)}点`;const root=$('list');root.replaceChildren();if(!keys.length){const p=document.createElement('p');p.className='empty';p.textContent='まだ商品がありません';root.append(p);return;}for(const n of keys){const row=document.createElement('div');row.className='item';const code=document.createElement('span');code.className='code';code.textContent=n;const minus=document.createElement('button');minus.className='secondary';minus.textContent='−';minus.setAttribute('aria-label',n+'を1減らす');minus.onclick=()=>{if(entries[n]<=1){if(confirm(`${n} を削除しますか？`)){delete entries[n];delete lastRead[n];}}else {entries[n]--;lastRead[n]=++readSerial;}save();};const count=document.createElement('span');count.className='qty';count.textContent=entries[n];const plus=document.createElement('button');plus.textContent='+';plus.setAttribute('aria-label',n+'を1増やす');plus.onclick=()=>register(n);row.append(code,minus,count,plus);root.append(row);}}
+function register(raw){const n=normalize(raw);if(!n)return false;entries[n]=(entries[n]||0)+1;lastRead[n]=++readSerial;save();$('scanInfo').textContent=`登録：${n}（${entries[n]}点）`;if($('sound').checked)notifyRead();return true;}
+function editCode(oldCode){
+ const answer=prompt('商品番号を修正（数字・ハイフン可）',oldCode);
+ if(answer===null)return;
+ const newCode=normalize(answer);
+ if(!newCode){alert('数字を入力してください');return;}
+ if(newCode===oldCode)return;
+ if(Object.prototype.hasOwnProperty.call(entries,newCode)){
+  if(!confirm(`${newCode} は既に登録されています。数量を合算しますか？`))return;
+  entries[newCode]+=entries[oldCode];
+  lastRead[newCode]=Math.max(lastRead[newCode]||0,lastRead[oldCode]||0);
+ }else{
+  entries[newCode]=entries[oldCode];lastRead[newCode]=lastRead[oldCode]||++readSerial;
+ }
+ delete entries[oldCode];delete lastRead[oldCode];save();
+ $('scanInfo').textContent=`修正：${oldCode} → ${newCode}`;
+}
+function render(){const keys=orderedKeys();$('kinds').textContent=`${keys.length}種類`;$('total').textContent=`合計${Object.values(entries).reduce((a,b)=>a+b,0)}点`;const root=$('list');root.replaceChildren();if(!keys.length){const p=document.createElement('p');p.className='empty';p.textContent='まだ商品がありません';root.append(p);return;}for(const n of keys){const row=document.createElement('div');row.className='item';const code=document.createElement('span');code.className='code';code.textContent=n;code.title='タップして商品番号を編集';code.setAttribute('role','button');code.setAttribute('tabindex','0');code.setAttribute('aria-label',n+'を編集');code.onclick=()=>editCode(n);code.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();editCode(n);}};const minus=document.createElement('button');minus.className='secondary';minus.textContent='−';minus.setAttribute('aria-label',n+'を1減らす');minus.onclick=()=>{if(entries[n]<=1){if(confirm(`${n} を削除しますか？`)){delete entries[n];delete lastRead[n];}}else {entries[n]--;lastRead[n]=++readSerial;}save();};const count=document.createElement('span');count.className='qty';count.textContent=entries[n];const plus=document.createElement('button');plus.textContent='+';plus.setAttribute('aria-label',n+'を1増やす');plus.onclick=()=>register(n);row.append(code,minus,count,plus);root.append(row);}}
 $('add').onclick=()=>{if(register($('manual').value))$('manual').value='';else alert('数字を入力してください');};$('manual').onkeydown=e=>{if(e.key==='Enter')$('add').click();};$('sort').onchange=render;
 $('clear').onclick=()=>{if(confirm('すべての棚卸データを削除しますか？')){entries={};lastRead={};readSerial=0;save();}};
 $('export').onclick=()=>{const keys=orderedKeys();const csv='\ufeff商品番号,数量\r\n'+keys.map(k=>`="${k}",${entries[k]}`).join('\r\n');const blob=new Blob([csv],{type:'text/csv;charset=utf-8;'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=`tanaoroshi-${new Date().toISOString().slice(0,10)}.csv`;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),2000);};
+let audioCtx=null;
+function notifyRead(){
+ // iOS Safari/PWA does not expose standard vibration API. Try where supported,
+ // and give an audible confirmation on iOS instead.
+ if(typeof navigator.vibrate==='function'){
+  try{if(navigator.vibrate(85))return;}catch{}
+ }
+ if(!$('beep').checked)return;
+ try{
+  const Ctx=window.AudioContext||window.webkitAudioContext;
+  if(!Ctx)return;
+  audioCtx=audioCtx||new Ctx();
+  if(audioCtx.state==='suspended')audioCtx.resume().catch(()=>{});
+  const oscillator=audioCtx.createOscillator(),gain=audioCtx.createGain(),now=audioCtx.currentTime;
+  oscillator.type='sine';oscillator.frequency.value=1100;
+  gain.gain.setValueAtTime(0.0001,now);gain.gain.exponentialRampToValueAtTime(0.09,now+0.012);gain.gain.exponentialRampToValueAtTime(0.0001,now+0.095);
+  oscillator.connect(gain).connect(audioCtx.destination);oscillator.start(now);oscillator.stop(now+0.11);
+ }catch{}
+}
 let stream=null,worker=null,active=false,busy=false,front=false,timer=null,previous='',stable=0,armed=true,missing=0,lastCode='';
 function setStatus(s){$('status').textContent=s;}
 function resetTracking(){previous='';stable=0;armed=true;missing=0;lastCode='';}
@@ -26,6 +61,7 @@ async function getWorker(){
  return worker;
 }
 // CSS object-fit:cover の見た目と同じ位置から切り抜く。対象は中央の緑枠のみ。
+const scanCanvas=document.createElement('canvas');
 function cropFrame(){
  const v=$('video');if(!v.videoWidth||!v.videoHeight)return null;
  const vw=v.videoWidth,vh=v.videoHeight,b=v.getBoundingClientRect();
@@ -38,13 +74,10 @@ function cropFrame(){
  const x=Math.max(0,(r.left+insetX-b.left+offsetX)/scale),y=Math.max(0,(r.top+insetY-b.top+offsetY)/scale);
  const cw=Math.min(vw-x,(r.width-2*insetX)/scale),ch=Math.min(vh-y,(r.height-2*insetY)/scale);
  if(cw<10||ch<10)return null;
- const c=document.createElement('canvas');const upscale=Math.min(1.8,850/cw);
+ const c=scanCanvas;const upscale=Math.min(1.5,640/cw);
  c.width=Math.round(cw*upscale);c.height=Math.round(ch*upscale);
  const ctx=c.getContext('2d',{willReadFrequently:true});ctx.drawImage(v,x,y,cw,ch,0,0,c.width,c.height);
- // 明暗補正のみ。固定二値化は黄色ラベルの文字を消すことがあるため行わない。
- const img=ctx.getImageData(0,0,c.width,c.height);const d=img.data;
- let lo=255,hi=0;for(let i=0;i<d.length;i+=4){const g=(d[i]*77+d[i+1]*150+d[i+2]*29)>>8;lo=Math.min(lo,g);hi=Math.max(hi,g);}
- if(hi-lo>30){for(let i=0;i<d.length;i+=4){const g=(d[i]*77+d[i+1]*150+d[i+2]*29)>>8;const v=Math.max(0,Math.min(255,Math.round((g-lo)*255/(hi-lo))));d[i]=d[i+1]=d[i+2]=v;}ctx.putImageData(img,0,0);}
+ // OCR worker receives the cropped image without a costly per-pixel pass.
  return c;
 }
 // 四角枠内の数字のみ。ハイフンを許容し、英字混入を拒否する。
@@ -62,13 +95,13 @@ async function tick(){
  try{const canvas=cropFrame();if(!canvas)return;
   const result=await worker.recognize(canvas);if(!active)return;
   const code=extractCode(result.data.text);const confidence=Number(result.data.confidence)||0;
-  if(!code){missing++;stable=0;previous='';if(missing>=2)armed=true;setStatus('読み取り中');return;}
+  if(!code){missing++;stable=0;previous='';if(missing>=1)armed=true;setStatus('読み取り中');return;}
   missing=0;
   if(code===previous)stable++;else{previous=code;stable=1;}
   // 別番号を読んだら次の商品として受け付ける。同一番号は一度枠から外す。
   if(!armed&&code!==lastCode)armed=true;
   // 高信頼度なら1回で登録。低信頼度は2回一致を要求して誤登録を抑える。
-  const required=confidence>=85?1:2;
+  const required=confidence>=68?1:2;
   setStatus(armed?`認識：${code} (${Math.min(stable,required)}/${required})`:`登録済：${code}`);
   if(armed&&stable>=required){if(register(code)){armed=false;lastCode=code;setStatus(`登録完了：${code}`);}}
  }catch(e){setStatus('認識エラー');$('scanInfo').textContent='OCRエラー：'+String(e.message||e);}finally{busy=false;}
@@ -90,6 +123,6 @@ async function start(){
  }catch(e){const msg=String(e.message||e);stop();setStatus('開始エラー');$('scanInfo').textContent='カメラ/OCR起動エラー：'+msg;}
 }
 function stop(){active=false;clearTimeout(timer);timer=null;if(stream){stream.getTracks().forEach(t=>t.stop());stream=null;}$('video').srcObject=null;$('start').disabled=false;$('stop').disabled=true;setStatus('停止中');}
-$('start').onclick=start;$('stop').onclick=stop;$('flip').onclick=async()=>{const was=active;stop();front=!front;if(was)await start();};$('interval').onchange=()=>{};
+$('start').addEventListener('click',()=>{try{const Ctx=window.AudioContext||window.webkitAudioContext;if(Ctx){audioCtx=audioCtx||new Ctx();audioCtx.resume().catch(()=>{});}}catch{}start();});$('stop').onclick=stop;$('flip').onclick=async()=>{const was=active;stop();front=!front;if(was)await start();};$('interval').onchange=()=>{};
 document.addEventListener('visibilitychange',()=>{if(document.hidden&&active)stop();});
 if('serviceWorker'in navigator)navigator.serviceWorker.register('./sw.js').catch(()=>{});render();setStatus('待機中');
